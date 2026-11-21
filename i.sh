@@ -13,6 +13,7 @@
 #   - waits until that key can read the PRIVATE repo, clones it, shows the commit; you confirm the first 7 chars
 #   - runs gitops/install.sh from that commit (agent + policy + one systemd unit), then enables the unit
 # It does not touch SSH settings, ufw, users, existing services, backups or data.
+# apt runs with needrestart suspended: no running service is restarted, no reboot.
 set -euo pipefail
 REPO_SSH="${AISPACE_REPO:-git@github.com:aispace-yamamoto/aispace-infra.git}"  # AISPACE_REPO: tests only
 cmd="${1:-}"; host="${2:-}"
@@ -36,7 +37,7 @@ check(){
   systemctl is-active aispace-gitops 2>/dev/null || true
   say "install WOULD create/change only"
   echo "  apt packages above marked MISSING"
-  echo "  /opt/aispace-gitops  /etc/aispace-gitops  /var/lib/aispace-gitops"
+  echo "  /opt/aispace-gitops  /etc/aispace-gitops  /var/lib/aispace-gitops  /opt/aispace-gitops-canary (empty)"
   echo "  /etc/systemd/system/aispace-gitops.service (+ .d/paths.conf)"
   echo "nothing changed by 'check'."
   set -e
@@ -46,7 +47,7 @@ do_install(){
   check </dev/null
   ask "Continue with install on $host?"
   need=(); for p in git python3 openssh-client age qrencode; do dpkg -s "$p" >/dev/null 2>&1 || need+=("$p"); done
-  if [ ${#need[@]} -gt 0 ]; then say "apt install ${need[*]}"; apt-get update -q && apt-get install -y -q --no-install-recommends "${need[@]}"; fi
+  if [ ${#need[@]} -gt 0 ]; then say "apt install ${need[*]}"; DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=l NEEDRESTART_SUSPEND=1 apt-get update -q && DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=l NEEDRESTART_SUSPEND=1 apt-get install -y -q --no-install-recommends "${need[@]}"; fi   # never restart running services
   install -d -m 755 /etc/aispace-gitops; install -d -m 700 /var/lib/aispace-gitops
   [ -f /etc/aispace-gitops/deploy_key ] || ssh-keygen -q -t ed25519 -N '' -C "aispace-gitops@$host" -f /etc/aispace-gitops/deploy_key </dev/null
   chmod 600 /etc/aispace-gitops/deploy_key
