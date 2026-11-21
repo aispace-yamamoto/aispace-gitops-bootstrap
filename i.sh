@@ -67,7 +67,8 @@ do_install(){
   [ "$a" = "$short" ] || { echo "commit mismatch: stopped. Nothing installed except the key and packages."; exit 1; }
   bash /opt/aispace-gitops/src/gitops/install.sh "$host" "/opt/aispace-gitops/src/hosts/$host/policy.template.json" </dev/null
   ask "Start the agent now (it only reads the repo until a GO arrives)?"
-  systemctl enable --now aispace-gitops
+  systemctl enable aispace-gitops >/dev/null 2>&1
+  systemctl restart aispace-gitops   # restart (not just start): a re-install must load the new code/settings
   sleep 5; systemctl --no-pager --lines=8 status aispace-gitops || true
   say "done. Take a screenshot of this screen and send it to the Claude chat."
 }

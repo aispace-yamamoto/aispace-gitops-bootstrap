@@ -5,4 +5,4 @@ shows the host state (`check`), creates a read-only deploy key, and installs the
 private repository after you confirm the commit. See the private repo `docs/62_bootstrap.md`.
 
 Verify before running: `sha256sum i.sh` must equal
-`4480d5298e105fef8c23538dd892621d59c8977a175156e3f251bf8a76b67c9e` (also announced in the Claude chat).
+`21a62772c2fd5f83d31158f02d84694a0bb0a426e30bef86d2f57951dbe492bf` (also announced in the Claude chat).
