@@ -20,6 +20,11 @@ REPO_SSH="${AISPACE_REPO:-git@github.com:aispace-yamamoto/aispace-infra.git}"  #
 cmd="${1:-}"; host="${2:-}"
 case "$host" in sakura-01|xserver-01) ;; *) echo "usage: sudo bash i.sh {check|install|policy-update} {sakura-01|xserver-01}"; exit 2;; esac
 [ "$(id -u)" = 0 ] || { echo "root is required: run with sudo"; exit 2; }
+# wrong-host guard: stop BEFORE anything is changed if this machine already belongs to another host name
+if [ -f /etc/aispace-gitops/policy.json ]; then
+  cur=$(python3 -c 'import json;print(json.load(open("/etc/aispace-gitops/policy.json"))["host"])' 2>/dev/null || true)
+  [ -z "$cur" ] || [ "$cur" = "$host" ] || { echo "STOP: this machine is '$cur', not '$host' ($(hostname)). Nothing was changed."; exit 2; }
+fi
 say(){ printf '\n\033[1m== %s\033[0m\n' "$*"; }
 ask(){ local a; read -r -p "$1 [type yes]: " a; [ "$a" = yes ] || { echo "stopped (nothing more changed)"; exit 1; }; }
 
