@@ -6,6 +6,7 @@
 #   2) sha256sum i.sh            -> compare with the value 山本 received in the Claude chat / GitHub release note
 #   3) sudo bash i.sh check sakura-01     (READ-ONLY: shows current state and what install would change)
 #   4) sudo bash i.sh install sakura-01   (asks for confirmation at every step)
+#   later) sudo bash i.sh policy-update <host>  (shows the policy diff from Git, applies only after "yes")
 #
 # What install does (and nothing else):
 #   - apt: git python3 openssh-client age qrencode (only if missing)
@@ -17,7 +18,7 @@
 set -euo pipefail
 REPO_SSH="${AISPACE_REPO:-git@github.com:aispace-yamamoto/aispace-infra.git}"  # AISPACE_REPO: tests only
 cmd="${1:-}"; host="${2:-}"
-case "$host" in sakura-01|xserver-01) ;; *) echo "usage: sudo bash i.sh {check|install} {sakura-01|xserver-01}"; exit 2;; esac
+case "$host" in sakura-01|xserver-01) ;; *) echo "usage: sudo bash i.sh {check|install|policy-update} {sakura-01|xserver-01}"; exit 2;; esac
 [ "$(id -u)" = 0 ] || { echo "root is required: run with sudo"; exit 2; }
 say(){ printf '\n\033[1m== %s\033[0m\n' "$*"; }
 ask(){ local a; read -r -p "$1 [type yes]: " a; [ "$a" = yes ] || { echo "stopped (nothing more changed)"; exit 1; }; }
@@ -73,4 +74,23 @@ do_install(){
   say "done. Take a screenshot of this screen and send it to the Claude chat."
 }
 
-case "$cmd" in check) check;; install) do_install;; *) echo "usage: sudo bash i.sh {check|install} <host>"; exit 2;; esac
+policy_update(){
+  [ -f /etc/aispace-gitops/policy.json ] && [ -f /etc/aispace-gitops/deploy_key ] || { echo "not installed yet: run install first"; exit 1; }
+  export GIT_SSH_COMMAND="ssh -i /etc/aispace-gitops/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/var/lib/aispace-gitops/known_hosts"
+  rm -rf /opt/aispace-gitops/src; git clone -q --depth 1 "$REPO_SSH" /opt/aispace-gitops/src </dev/null
+  short=$(git -C /opt/aispace-gitops/src rev-parse --short=7 HEAD)
+  say "repository commit: $short  $(git -C /opt/aispace-gitops/src log -1 --format=%s | cut -c1-60)"
+  local a; read -r -p "Type the 7 characters of the commit shown in the GitHub app / Claude chat: " a
+  [ "$a" = "$short" ] || { echo "commit mismatch: stopped. Policy unchanged."; exit 1; }
+  new="/opt/aispace-gitops/src/hosts/$host/policy.template.json"
+  say "policy change (- current  + new)"
+  diff -u /etc/aispace-gitops/policy.json "$new" && { echo "no difference: nothing to do"; exit 0; }
+  ask "Apply this policy change on $host?"
+  cp -a /etc/aispace-gitops/policy.json "/var/lib/aispace-gitops/policy.before-$(date +%Y%m%d%H%M%S).json"
+  install -m 644 "$new" /etc/aispace-gitops/policy.json
+  bash /opt/aispace-gitops/src/gitops/install.sh "$host" "$new" </dev/null
+  systemctl restart aispace-gitops; sleep 3; systemctl --no-pager --lines=5 status aispace-gitops || true
+  say "done. previous policy saved under /var/lib/aispace-gitops/policy.before-*.json"
+}
+
+case "$cmd" in check) check;; install) do_install;; policy-update) policy_update;; *) echo "usage: sudo bash i.sh {check|install|policy-update} <host>"; exit 2;; esac
