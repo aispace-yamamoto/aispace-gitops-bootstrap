@@ -7,6 +7,7 @@
 #   3) sudo bash i.sh check sakura-01     (READ-ONLY: shows current state and what install would change)
 #   4) sudo bash i.sh install sakura-01   (asks for confirmation at every step)
 #   later) sudo bash i.sh policy-update <host>  (shows the policy diff from Git, applies only after "yes")
+#          sudo bash i.sh totp-setup <host>     (new authenticator secret for GO; policy-update runs it when needed)
 #
 # What install does (and nothing else):
 #   - apt: git python3 openssh-client age qrencode (only if missing)
@@ -18,7 +19,7 @@
 set -euo pipefail
 REPO_SSH="${AISPACE_REPO:-git@github.com:aispace-yamamoto/aispace-infra.git}"  # AISPACE_REPO: tests only
 cmd="${1:-}"; host="${2:-}"
-case "$host" in sakura-01|xserver-01) ;; *) echo "usage: sudo bash i.sh {check|install|policy-update} {sakura-01|xserver-01}"; exit 2;; esac
+case "$host" in sakura-01|xserver-01) ;; *) echo "usage: sudo bash i.sh {check|install|policy-update|totp-setup} {sakura-01|xserver-01}"; exit 2;; esac
 [ "$(id -u)" = 0 ] || { echo "root is required: run with sudo"; exit 2; }
 # wrong-host guard: stop BEFORE anything is changed if this machine already belongs to another host name
 if [ -f /etc/aispace-gitops/policy.json ]; then
@@ -79,6 +80,34 @@ do_install(){
   say "done. Take a screenshot of this screen and send it to the Claude chat."
 }
 
+TOTP=/etc/aispace-gitops/go_totp
+totp_setup(){
+  # The secret is created HERE and leaves the host only as the QR code on this console screen.
+  # GitHub, Git and the AI never see it; Apply (GO) sends only a hash of the 6-digit code.
+  install -d -m 755 /etc/aispace-gitops
+  if [ -s "$TOTP" ]; then ask "An authenticator secret already exists on $host. Replace it (the old iPhone entry stops working)?"; fi
+  sec=$(python3 -c 'import base64,os;print(base64.b32encode(os.urandom(20)).decode())')
+  say "Scan this QR with the iPhone authenticator app (e.g. iPhone Passwords > Codes, Google Authenticator)"
+  uri="otpauth://totp/AiSpace%20GO:$host?secret=$sec&issuer=AiSpace%20GO&algorithm=SHA1&digits=6&period=30"
+  qrencode -t ANSIUTF8 "$uri"
+  echo "If the camera cannot read it, enter this key manually (time-based, 6 digits):"; echo "  $sec"
+  local a ok=""
+  for i in 1 2 3; do
+    read -r -p "Type the 6-digit code the app now shows for 'AiSpace GO: $host': " a
+    if SEC="$sec" CODE="$a" python3 -c '
+import base64,hmac,os,sys,time
+k=base64.b32decode(os.environ["SEC"]); n=int(time.time())//30
+def c(x):
+    h=hmac.new(k,x.to_bytes(8,"big"),"sha1").digest(); o=h[-1]&15
+    return "%06d"%((int.from_bytes(h[o:o+4],"big")&0x7FFFFFFF)%1000000)
+sys.exit(0 if os.environ["CODE"] in [c(n+d) for d in (-1,0,1)] else 1)'; then ok=1; break; fi
+    echo "code does not match (check the phone clock is automatic). try again."
+  done
+  [ -n "$ok" ] || { echo "stopped: secret NOT saved, nothing changed"; exit 1; }
+  umask 077; printf '%s\n' "$sec" > "$TOTP.new"; chown root:root "$TOTP.new"; chmod 600 "$TOTP.new"; mv "$TOTP.new" "$TOTP"
+  say "saved $TOTP (root only). From now on Apply (GO) for $host needs the code from this app."
+}
+
 policy_update(){
   [ -f /etc/aispace-gitops/policy.json ] && [ -f /etc/aispace-gitops/deploy_key ] || { echo "not installed yet: run install first"; exit 1; }
   export GIT_SSH_COMMAND="ssh -i /etc/aispace-gitops/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/var/lib/aispace-gitops/known_hosts"
@@ -91,6 +120,9 @@ policy_update(){
   say "policy change (- current  + new)"
   diff -u /etc/aispace-gitops/policy.json "$new" && { echo "no difference: nothing to do"; exit 0; }
   ask "Apply this policy change on $host?"
+  if python3 -c 'import json,sys;sys.exit(0 if json.load(open(sys.argv[1])).get("go_check",{}).get("totp") else 1)' "$new" && [ ! -s "$TOTP" ]; then
+    say "the new policy requires an authenticator code for GO: set it up first"; totp_setup
+  fi
   cp -a /etc/aispace-gitops/policy.json "/var/lib/aispace-gitops/policy.before-$(date +%Y%m%d%H%M%S).json"
   install -m 644 "$new" /etc/aispace-gitops/policy.json
   bash /opt/aispace-gitops/src/gitops/install.sh "$host" "$new" </dev/null
@@ -98,4 +130,4 @@ policy_update(){
   say "done. previous policy saved under /var/lib/aispace-gitops/policy.before-*.json"
 }
 
-case "$cmd" in check) check;; install) do_install;; policy-update) policy_update;; *) echo "usage: sudo bash i.sh {check|install|policy-update} <host>"; exit 2;; esac
+case "$cmd" in check) check;; install) do_install;; policy-update) policy_update;; totp-setup) totp_setup;; *) echo "usage: sudo bash i.sh {check|install|policy-update|totp-setup} <host>"; exit 2;; esac
